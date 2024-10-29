@@ -1,0 +1,10 @@
+/home/apratim/Softwares/Deal.II/deal.II-v9.4.2/examples/btp1/Group-13/Siladitya_test/CMakeFiles/rebuild_cache.dir
+/home/apratim/Softwares/Deal.II/deal.II-v9.4.2/examples/btp1/Group-13/Siladitya_test/CMakeFiles/info.dir
+/home/apratim/Softwares/Deal.II/deal.II-v9.4.2/examples/btp1/Group-13/Siladitya_test/CMakeFiles/distclean.dir
+/home/apratim/Softwares/Deal.II/deal.II-v9.4.2/examples/btp1/Group-13/Siladitya_test/CMakeFiles/runclean.dir
+/home/apratim/Softwares/Deal.II/deal.II-v9.4.2/examples/btp1/Group-13/Siladitya_test/CMakeFiles/release.dir
+/home/apratim/Softwares/Deal.II/deal.II-v9.4.2/examples/btp1/Group-13/Siladitya_test/CMakeFiles/debug.dir
+/home/apratim/Softwares/Deal.II/deal.II-v9.4.2/examples/btp1/Group-13/Siladitya_test/CMakeFiles/run.dir
+/home/apratim/Softwares/Deal.II/deal.II-v9.4.2/examples/btp1/Group-13/Siladitya_test/CMakeFiles/edit_cache.dir
+/home/apratim/Softwares/Deal.II/deal.II-v9.4.2/examples/btp1/Group-13/Siladitya_test/CMakeFiles/strip_comments.dir
+/home/apratim/Softwares/Deal.II/deal.II-v9.4.2/examples/btp1/Group-13/Siladitya_test/CMakeFiles/Test-1.dir
