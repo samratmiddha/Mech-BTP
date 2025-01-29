@@ -180,18 +180,6 @@ public:
             for (unsigned int j = 0; j < dim; ++j)
                 e_vol += e_e[i][j] * StandardTensors<dim>::I[i][j];
 
-        // for (unsigned int i = 0; i < dim; ++i)
-        //     for (unsigned int j = 0; j < dim; ++j)
-        //         e_vol += e_e[i][j] * StandardTensors<dim>::I_vol[i][j];
-
-        // for (unsigned int i = 0; i < dim; ++i)
-        // {
-        //     e_vol_tensor[i][i] = e_vol;
-        // }
-        // calculate e_dev;
-
-        // e_dev = e_e - e_vol_tensor;
-
         std::cout << "prnting ee_dev" << std::endl;
         for (int i = 0; i < dim; i++)
         {
