@@ -169,10 +169,6 @@ public:
         {
             tau_r_v[i] = mat_viscous_prop[i][2];
         }
-        // Get the properties of the Maxwell elements
-        // Viscous moduli
-
-        // Add contributions from each Maxwell element
         for (int i = 0; i < num_vis_elements; ++i)
         {
             modulus += mu_vis[i] * std::exp(-time / tau_r_v[i]);
@@ -193,6 +189,7 @@ public:
     double e_vol_hist;
     double delta_t = 0.005;
     ViscoElasticMaterial<dim> mat;
+    Tensor<4, dim> c_ijkl_vis;
 
     ViscoElasticModule() {};
     ViscoElasticModule(ViscoElasticMaterial<dim> &mat, double delta_t)
@@ -214,9 +211,13 @@ public:
         alpha_dev_hist.resize(mat.num_vis_elements);
         alpha_vol_hist.resize(mat.num_vis_elements, 0.0);
     }
+    Tensor<4, dim> get_stiffness_tensor()
+    {
+        return c_ijkl_vis;
+    }
+
     Tensor<2, dim> get_stress(SymmetricTensor<2, dim> e_e)
     {
-        std::cout << "debugging starts" << std::endl;
         int num_vis_elements = mat.num_vis_elements;
 
         vector<double> tau_r_v = mat.get_tau_r_v();
@@ -228,8 +229,6 @@ public:
 
         Tensor<4, dim> c_bulk_eq = K_eq * StandardTensors<dim>::II_vol;
         Tensor<4, dim> c_shear_eq = 2.0 * mu_eq * StandardTensors<dim>::II_dev;
-        std::cout << "c_bulk_eq = " << c_bulk_eq << std::endl;
-        std::cout << "c_shear_eq = " << c_shear_eq << std::endl;
         Tensor<4, dim> c_bulk_vis;
         Tensor<4, dim> c_shear_vis;
         Tensor<2, dim> sigma_vis_2_vol;
@@ -250,29 +249,13 @@ public:
             for (unsigned int j = 0; j < dim; ++j)
                 e_vol += e_e[i][j] * StandardTensors<dim>::I[i][j];
 
-        std::cout << "prnting ee_dev" << std::endl;
-        for (int i = 0; i < dim; i++)
-        {
-            for (int j = 0; j < dim; j++)
-            {
-                std::cout << e_dev[i][j] << "\t";
-            }
-            std::cout << "\n";
-        }
-        // calculate e_vol;
-
-        std::cout << "ee_vol = " << e_vol << std::endl;
-
         vector<Tensor<2, dim>> alpha_dev_curr(num_vis_elements);
         vector<double> alpha_vol_curr(num_vis_elements);
-        std::cout << "delta t" << " " << delta_t << std::endl;
 
         for (int i = 0; i < num_vis_elements; i++)
         {
             double tvr_dt = tau_r_v[i] / delta_t;
             double tdr_dt = tau_d_v[i] / delta_t;
-            std::cout << "tvr_dt " << i << " " << tvr_dt << std::endl;
-            std::cout << "tdr_dt " << i << " " << tdr_dt << std::endl;
 
             double his_v = 1.0 - exp(-1 * (delta_t / tau_r_v[i]));
             double his_d = 1.0 - exp(-1 * (delta_t / tau_d_v[i]));
@@ -293,7 +276,7 @@ public:
 
         Tensor<2, dim> sigma_vis_2 = sigma_vis_2_dev;
 
-        Tensor<4, dim> c_ijkl_vis = c_shear_eq + c_shear_vis;
+        c_ijkl_vis = c_shear_eq + c_shear_vis;
 
         Tensor<2, dim> sigma_vis_1;
 
@@ -328,307 +311,391 @@ public:
         e_vol_hist = e_vol;
         e_dev_hist = e_dev;
 
-        std::cout << "debugging ends" << std::endl;
         return sigma_vis;
     }
 };
 
 // ---------------------------------------- get strain -------------------------------------------------------//
+#include <deal.II/base/quadrature_lib.h>
+#include <deal.II/base/function.h>
+#include <deal.II/base/logstream.h>
+#include <deal.II/base/multithread_info.h>
+#include <deal.II/base/conditional_ostream.h>
+#include <deal.II/base/tensor.h>
+#include <deal.II/base/symmetric_tensor.h>
+#include <deal.II/base/function_parser.h>
+#include <deal.II/base/utilities.h>
+#include <deal.II/base/timer.h>
+#include <deal.II/lac/vector.h>
+#include <deal.II/lac/full_matrix.h>
+#include <deal.II/lac/dynamic_sparsity_pattern.h>
+#include <deal.II/lac/petsc_vector.h>
+#include <deal.II/lac/petsc_sparse_matrix.h>
+#include <deal.II/lac/petsc_solver.h>
+#include <deal.II/lac/petsc_precondition.h>
+#include <deal.II/lac/precondition.h>
+#include <deal.II/lac/affine_constraints.h>
+#include <deal.II/lac/sparsity_tools.h>
+#include <deal.II/lac/sparse_matrix.h>
+#include <deal.II/lac/sparse_direct.h>
+#include <deal.II/distributed/shared_tria.h>
+#include <deal.II/grid/tria.h>
+#include <deal.II/grid/grid_generator.h>
+#include <deal.II/grid/grid_refinement.h>
+#include <deal.II/grid/manifold_lib.h>
+#include <deal.II/grid/grid_tools.h>
+#include <deal.II/dofs/dof_handler.h>
+#include <deal.II/dofs/dof_tools.h>
+#include <deal.II/dofs/dof_renumbering.h>
+#include <deal.II/fe/fe_values.h>
+#include <deal.II/fe/fe_system.h>
+#include <deal.II/fe/fe_q.h>
+#include <deal.II/numerics/vector_tools.h>
+#include <deal.II/numerics/matrix_tools.h>
+#include <deal.II/numerics/data_out.h>
+#include <deal.II/numerics/error_estimator.h>
+#include <deal.II/physics/transformations.h>
+#include <fstream>
+#include <iostream>
+#include <iomanip>
+
+using namespace dealii;
+
 template <int dim>
-class ViscoelasticFEM
+class FixedBoundary : public Function<dim>
 {
 public:
-    ViscoelasticFEM();
-    void setup_system();
-    void initialize_material();
-    void apply_boundary_conditions(double time);
-    void solve_timestep(double time);
-    void output_results(double time) const;
-    SymmetricTensor<2, dim> compute_strain(const FEValues<dim> &fe_values,
-                                           const unsigned int q_index);
-
-    void run_simulation();
-
-private:
-    Triangulation<dim> triangulation;
-    DoFHandler<dim> dof_handler;
-    FESystem<dim> fe;
-    SparseMatrix<double> system_matrix;
-    Vector<double> solution, system_rhs;
-    ViscoElasticMaterial<dim> material;
-    std::vector<ViscoElasticModule<dim>> material_properties;
-    std::map<dealii::types::global_dof_index, double> boundary_values;
-    double time_step;
-
-    QGauss<dim> quadrature_formula;
-    TimerOutput timer;
+    FixedBoundary() : Function<dim>(dim) {}
+    virtual void vector_value(const Point<dim> &p, Vector<double> &values) const override
+    {
+        AssertDimension(values.size(), this->n_components);
+        for (unsigned int i = 0; i < this->n_components; ++i)
+            values[i] = 0.0;
+    }
 };
 
 template <int dim>
-ViscoelasticFEM<dim>::ViscoelasticFEM()
-    : dof_handler(triangulation),
-      fe(FE_Q<dim>(1), dim),
-      quadrature_formula(2),
-      timer(std::cout, TimerOutput::summary, TimerOutput::wall_times),
-      time_step(0.005)
-{
-    // Create mesh
-    if (dim == 2)
-    {
-        // Create 2D rectangular mesh: [0,1] x [0,1]
-        std::vector<unsigned int> repetitions(dim, 10); // Divide into 10x10 cells
-        GridGenerator::subdivided_hyper_rectangle(triangulation, repetitions, Point<dim>(0, 0), Point<dim>(1, 1));
-    }
-    else if (dim == 3)
-    {
-        // Create 3D cuboidal mesh: [0,1] x [0,1] x [0,1]
-        std::vector<unsigned int> repetitions(dim, 10); // Divide into 10x10x10 cells
-        GridGenerator::subdivided_hyper_rectangle(triangulation, repetitions, Point<dim>(0, 0, 0), Point<dim>(1, 1, 1));
-    }
-    else
-    {
-        Assert(false, ExcNotImplemented()); // Handle case where dim is not 2 or 3
-    }
-
-    int num_viscous_elements = 5;
-    vector<vector<double>> mat_viscous_prop(num_viscous_elements, vector<double>(4));
-    vector<double> mat_viscous_prop_eq(4);
-    mat_viscous_prop_eq[1] = 0.5;   // mu_eq
-    mat_viscous_prop_eq[2] = 0.1;   // k_eq
-    mat_viscous_prop[0][0] = 0.005; // tau_d_v;
-    mat_viscous_prop[0][1] = 0.6;   // mu_vis
-    mat_viscous_prop[0][2] = 0.01;  // tau_r_v
-    mat_viscous_prop[0][3] = 2.0;   // k_vis
-    mat_viscous_prop[1][0] = 0.05;  // tau_d_v;
-    mat_viscous_prop[1][1] = 0.4;   // mu_vis
-    mat_viscous_prop[1][2] = 0.1;   // tau_r_v
-    mat_viscous_prop[1][3] = 1.5;   // k_vis
-    mat_viscous_prop[2][0] = 0.2;   // tau_d_v;
-    mat_viscous_prop[2][1] = 0.3;   // mu_vis
-    mat_viscous_prop[2][2] = 0.5;   // tau_r_v
-    mat_viscous_prop[2][3] = 1.0;   // k_vis
-    mat_viscous_prop[3][0] = 0.5;   // tau_d_v;
-    mat_viscous_prop[3][1] = 0.2;   // mu_vis
-    mat_viscous_prop[3][2] = 1.0;   // tau_r_v
-    mat_viscous_prop[3][3] = 0.6;   // k_vis
-    mat_viscous_prop[4][0] = 1.0;   // tau_d_v;
-    mat_viscous_prop[4][1] = 0.1;   // mu_vis
-    mat_viscous_prop[4][2] = 5.0;   // tau_r_v
-    mat_viscous_prop[4][3] = 0.4;   // k_vis
-
-    ViscoElasticMaterial<2> mat(mat_viscous_prop, mat_viscous_prop_eq);
-    material = mat;
-}
-
-template <int dim>
-void ViscoelasticFEM<dim>::setup_system()
-{
-    dof_handler.distribute_dofs(fe);
-
-    DynamicSparsityPattern dsp(dof_handler.n_dofs(), dof_handler.n_dofs());
-    DoFTools::make_sparsity_pattern(dof_handler, dsp);
-
-    SparsityPattern sparsity_pattern;
-    sparsity_pattern.copy_from(dsp);
-
-    system_matrix.reinit(sparsity_pattern);
-
-    solution.reinit(dof_handler.n_dofs());
-    system_rhs.reinit(dof_handler.n_dofs());
-
-    material_properties.resize(triangulation.n_active_cells());
-}
-template <int dim>
-void ViscoelasticFEM<dim>::initialize_material()
-{
-    int cell_index = 0;
-    for (const auto &cell : dof_handler.active_cell_iterators())
-    {
-        material_properties[cell_index] = ViscoElasticModule(material, time_step);
-        cell_index++;
-    }
-}
-
-template <int dim>
-class MovingBoundaryFunction : public dealii::Function<dim>
+class ConstantRateBoundary : public Function<dim>
 {
 public:
-    MovingBoundaryFunction(double boundary_displacement)
-        : dealii::Function<dim>(dim), boundary_displacement(boundary_displacement) {}
+    ConstantRateBoundary(double time, double rate, double T_thresh)
+        : Function<dim>(dim), time(time), rate(rate), T_thresh(T_thresh) {}
 
-    virtual double value(const dealii::Point<dim> & /*p*/, const unsigned int /*component*/ = 0) const override
+    virtual void vector_value(const Point<dim> &p, Vector<double> &values) const override
     {
-        return boundary_displacement;
-    }
-
-private:
-    double boundary_displacement;
-};
-
-template <int dim>
-void ViscoelasticFEM<dim>::apply_boundary_conditions(double time)
-{
-    // Ensure the boundary values map is cleared before applying new boundary conditions
-    boundary_values.clear();
-    if (system_matrix.n() == 0)
-    {
-        // Handle the case where system_matrix is invalid
-        std::cerr << "Error: system_matrix is invalid" << std::endl;
-        return;
-    }
-
-    // Define the fixed boundary on one side (e.g., boundary_id = 0 for the left side)
-    // Use a Function<dim> that has `dim` components
-    VectorTools::interpolate_boundary_values(
-        dof_handler,
-        0,                                         // Boundary ID for the fixed side
-        dealii::Functions::ZeroFunction<dim>(dim), // Correct number of components
-        boundary_values);
-
-    // Define the maximum displacement and extension time for the moving boundary
-    const double max_displacement = 0.1; // Maximum displacement value
-    const double extension_time = 0.05;  // Time until maximum displacement is reached
-
-    // Calculate the boundary displacement based on the current time
-    const double boundary_displacement = (time <= extension_time)
-                                             ? (time / extension_time) * max_displacement
-                                             : max_displacement;
-
-    // Instantiate the custom boundary function with the computed displacement
-    MovingBoundaryFunction<dim> moving_boundary_function(boundary_displacement);
-
-    // Apply the moving boundary condition using the custom function
-    VectorTools::interpolate_boundary_values(
-        dof_handler,
-        1, // Boundary ID for the moving side
-        moving_boundary_function,
-        boundary_values);
-    for (const auto &entry : boundary_values)
-    {
-        std::cout << "Boundary " << entry.first << " -> " << entry.second << std::endl;
-    }
-    // Apply the boundary values to the system matrix and RHS vector
-    MatrixTools::apply_boundary_values(boundary_values, system_matrix, solution, system_rhs);
-}
-
-template <int dim>
-SymmetricTensor<2, dim> ViscoelasticFEM<dim>::compute_strain(const FEValues<dim> &fe_values,
-                                                             const unsigned int q_index)
-{
-    SymmetricTensor<2, dim> strain;
-    for (unsigned int i = 0; i < dim; ++i)
-    {
-        for (unsigned int j = 0; j < dim; ++j)
+        AssertDimension(values.size(), this->n_components);
+        for (unsigned int i = 0; i < this->n_components; ++i)
+            values[i] = 0.0;
+        // Apply on the right face: x = 1
+        if (std::abs(p[0] - 1.0) < 1e-6)
         {
-            strain[i][j] = 0.5 * (fe_values.shape_grad(i, q_index)[j] + fe_values.shape_grad(j, q_index)[i]);
+            double disp = (time <= T_thresh ? rate * time : rate * T_thresh);
+            values[0] = disp;
         }
     }
-    return strain;
-}
+
+private:
+    double time;     // current time
+    double rate;     // constant pulling rate (computed so that at T_thresh displacement = target)
+    double T_thresh; // threshold time after which displacement remains constant
+};
 
 template <int dim>
-void ViscoelasticFEM<dim>::solve_timestep(double time)
+class ViscoElasticFEM
 {
-    TimerOutput::Scope timer_section(timer, "Solve timestep");
+public:
+    ViscoElasticFEM(const unsigned int degree, const unsigned int n_global_refinements);
+    void run();
 
-    system_matrix = 0;
-    system_rhs = 0;
+private:
+    void make_grid();
+    void setup_system();
+    void assemble_system();
+    void solve();
+    void output_results();
 
-    FEValues<dim> fe_values(fe, quadrature_formula,
-                            update_values | update_gradients | update_quadrature_points);
+    Triangulation<dim> triangulation;
+    FESystem<dim> fe; // Use FESystem instead of FE_Q
+    DoFHandler<dim> dof_handler;
+    AffineConstraints<double> constraints;
+    SparsityPattern sparsity_pattern;
+    SparseMatrix<double> system_matrix;
+    Vector<double> solution;
+    Vector<double> system_rhs;
 
-    // Assemble the system based on strain, stress, and material properties
+    ViscoElasticMaterial<dim> material;
+    std::vector<vector<ViscoElasticModule<dim>>> viscoelastic_modules;
+    double delta_t;
+    unsigned int time_step;
+    unsigned int n_time_steps;
+};
+
+template <int dim>
+ViscoElasticFEM<dim>::ViscoElasticFEM(const unsigned int degree, const unsigned int n_global_refinements)
+    : fe(FESystem<dim>(FE_Q<dim>(degree), dim)),
+      dof_handler(triangulation),
+      delta_t(0.005),
+      time_step(0),
+      n_time_steps(100)
+{
+    std::vector<std::vector<double>> mat_viscous_prop = {{0.005, 0.6, 0.01, 2.0}, {0.05, 0.4, 0.1, 1.5}, {0.2, 0.3, 0.5, 1.0}, {0.5, 0.2, 1.0, 0.6}, {1.0, 0.1, 5.0, 0.4}};
+    std::vector<double> mat_viscous_prop_eq = {1, 0.5, 0.1, 1.0};
+    material = ViscoElasticMaterial<dim>(mat_viscous_prop, mat_viscous_prop_eq);
+
+    // Initialize the grid
+    make_grid();
+    triangulation.refine_global(n_global_refinements);
+
+    // Setup the system
+    setup_system();
+
+    // Initialize viscoelastic modules for each quadrature point
+    QGauss<dim> quadrature_formula(fe.degree + 1);
+    FEValues<dim> fe_values(fe, quadrature_formula, update_quadrature_points);
+    unsigned int cell_index = 0;
     for (const auto &cell : dof_handler.active_cell_iterators())
     {
         fe_values.reinit(cell);
-        const unsigned int dofs_per_cell = fe.dofs_per_cell;
-        std::vector<types::global_dof_index> local_dof_indices(dofs_per_cell);
+        vector<ViscoElasticModule<dim>> viscoelastic_modules_cell;
+        viscoelastic_modules_cell.clear();
+        const std::vector<Point<dim>> &quadrature_points = fe_values.get_quadrature_points();
+        for (unsigned int q_index = 0; q_index < quadrature_points.size(); ++q_index)
+        {
+            viscoelastic_modules_cell.emplace_back(ViscoElasticModule<dim>(material, delta_t));
+        }
+        viscoelastic_modules.push_back(viscoelastic_modules_cell);
+        ++cell_index;
+    }
+}
+template <int dim>
+void ViscoElasticFEM<dim>::make_grid()
+{
+    GridGenerator::hyper_rectangle(triangulation,
+                                   Point<dim>(-1, -1, -1), Point<dim>(1, 1, 1));
+    // Mark boundary ids: left face: x=-1 as 0, right face: x=1 as 1.
+    for (auto &cell : triangulation.active_cell_iterators())
+        for (unsigned int face = 0; face < GeometryInfo<dim>::faces_per_cell; ++face)
+        {
+            const Point<dim> face_center = cell->face(face)->center();
+            if (std::abs(face_center[0] + 1.0) < 1e-6)
+                cell->face(face)->set_boundary_id(0);
+            else if (std::abs(face_center[0] - 1.0) < 1e-6)
+                cell->face(face)->set_boundary_id(1);
+        }
+}
 
-        SymmetricTensor<2, dim> strain;
-        Tensor<2, dim> stress;
+template <int dim>
+void ViscoElasticFEM<dim>::setup_system()
+{
+    dof_handler.distribute_dofs(fe);
+    std::cout << "Number of degrees of freedom: " << dof_handler.n_dofs() << std::endl;
 
-        // Local matrices and vectors for the current cell
-        FullMatrix<double> local_matrix(dofs_per_cell, dofs_per_cell);
-        Vector<double> local_rhs(dofs_per_cell);
+    constraints.clear();
+    DoFTools::make_hanging_node_constraints(dof_handler, constraints);
 
-        // Compute strain and stress using ViscoElasticModule for each quadrature point
+    // Apply fixed boundary condition on the left face (boundary id 0)
+    FixedBoundary<dim> fixed_boundary;
+    VectorTools::interpolate_boundary_values(dof_handler, 0, fixed_boundary,
+                                             constraints, ComponentMask({true, false, false}));
+
+    // (For now, the right face BC will be applied at each time step via run())
+    constraints.close();
+    DynamicSparsityPattern dsp(dof_handler.n_dofs());
+    DoFTools::make_sparsity_pattern(dof_handler, dsp, constraints, false);
+    sparsity_pattern.copy_from(dsp);
+
+    system_matrix.reinit(sparsity_pattern);
+    solution.reinit(dof_handler.n_dofs());
+    system_rhs.reinit(dof_handler.n_dofs());
+}
+
+template <int dim>
+void ViscoElasticFEM<dim>::assemble_system()
+{
+    QGauss<dim> quadrature_formula(fe.degree + 1);
+    FEValues<dim> fe_values(fe, quadrature_formula, update_values | update_gradients | update_quadrature_points | update_JxW_values);
+
+    const unsigned int dofs_per_cell = fe.n_dofs_per_cell();
+    FullMatrix<double> cell_matrix(dofs_per_cell, dofs_per_cell);
+    Vector<double> cell_rhs(dofs_per_cell);
+    std::vector<types::global_dof_index> local_dof_indices(dofs_per_cell);
+
+    unsigned int cell_index = 0;
+    for (const auto &cell : dof_handler.active_cell_iterators())
+    {
+        fe_values.reinit(cell);
+        cell_matrix = 0;
+        cell_rhs = 0;
+
+        // Get local DoF indices for current cell
+        cell->get_dof_indices(local_dof_indices);
+
         for (unsigned int q_index = 0; q_index < quadrature_formula.size(); ++q_index)
         {
-            strain = compute_strain(fe_values, q_index); // Call the strain calculation function
-            stress = material_properties[cell->index()].get_stress(strain);
+            // Compute strain from displacement
+            SymmetricTensor<2, dim> strain;
+            for (unsigned int i = 0; i < dim; ++i)
+                for (unsigned int j = 0; j < dim; ++j)
+                {
+                    strain[i][j] = 0.0;
+                    for (unsigned int k = 0; k < dofs_per_cell; ++k)
+                        strain[i][j] += 0.5 * (fe_values.shape_grad(k, q_index)[i] * solution(local_dof_indices[k]) +
+                                               fe_values.shape_grad(k, q_index)[j] * solution(local_dof_indices[k]));
+                }
 
-            // Integrate to assemble local contributions to the system matrix and RHS
+            // Access the module for the current cell and quadrature point:
+            Tensor<2, dim> stress = viscoelastic_modules[cell_index][q_index].get_stress(strain);
+            Tensor<4, dim> D = viscoelastic_modules[cell_index][q_index].get_stiffness_tensor();
+
+            // Assemble cell matrix contributions
             for (unsigned int i = 0; i < dofs_per_cell; ++i)
             {
                 for (unsigned int j = 0; j < dofs_per_cell; ++j)
                 {
-                    // Compute local contributions to the matrix
-                    local_matrix(i, j) += fe_values.shape_grad(i, q_index) *
-                                          fe_values.shape_grad(j, q_index) *
-                                          material.get_modulus(time);
+                    // Compute strain-displacement matrices B_i and B_j
+                    SymmetricTensor<2, dim> B_i, B_j;
+                    for (unsigned int k = 0; k < dim; ++k)
+                        for (unsigned int l = 0; l < dim; ++l)
+                        {
+                            B_i[k][l] = 0.5 * (fe_values.shape_grad(i, q_index)[k] * fe_values.shape_grad(j, q_index)[l]) +
+                                        0.5 * (fe_values.shape_grad(i, q_index)[l] * fe_values.shape_grad(j, q_index)[k]);
+                        }
+                    for (unsigned int k = 0; k < dim; ++k)
+                        for (unsigned int l = 0; l < dim; ++l)
+                            for (unsigned int m = 0; m < dim; ++m)
+                                for (unsigned int n = 0; n < dim; ++n)
+                                    cell_matrix(i, j) += B_i[k][l] * D[k][l][m][n] * B_j[m][n] * fe_values.JxW(q_index);
                 }
-                // Compute local contributions to the RHS
-                double stress_scalar = trace(stress); // Get scalar trace
-                local_rhs(i) += fe_values.shape_value(i, q_index) * stress_scalar * fe_values.JxW(q_index);
+                // Assemble the RHS (zero in this example)
+                cell_rhs(i) += 0.0;
             }
         }
-
-        // Transfer local contributions to the global matrix and RHS
-        cell->get_dof_indices(local_dof_indices);
-        for (unsigned int i = 0; i < dofs_per_cell; ++i)
-        {
-            for (unsigned int j = 0; j < dofs_per_cell; ++j)
-            {
-                system_matrix.add(local_dof_indices[i], local_dof_indices[j], local_matrix(i, j));
-            }
-            system_rhs(local_dof_indices[i]) += local_rhs(i);
-        }
+        constraints.distribute_local_to_global(cell_matrix, cell_rhs, local_dof_indices, system_matrix, system_rhs);
+        ++cell_index;
     }
-
-    // Solve the system using Conjugate Gradient (CG) solver
-    SolverControl solver_control(1000, 1e-8); // Use a more reasonable tolerance
-    SolverCG<Vector<double>> solver(solver_control);
-    PreconditionSSOR preconditioner; // A different preconditioner might help
-    solver.solve(system_matrix, solution, system_rhs, preconditioner);
 }
 
 template <int dim>
-void ViscoelasticFEM<dim>::output_results(double time) const
+void ViscoElasticFEM<dim>::solve()
+{
+    SolverControl solver_control(1000, 1e-12);
+    SolverCG<> solver(solver_control);
+    solver.solve(system_matrix, solution, system_rhs, PreconditionIdentity());
+    constraints.distribute(solution);
+}
+
+template <int dim>
+void ViscoElasticFEM<dim>::output_results()
 {
     DataOut<dim> data_out;
     data_out.attach_dof_handler(dof_handler);
     data_out.add_data_vector(solution, "displacement");
 
+    // Create vectors to store stress components at DoFs
+    Vector<double> stress_component_x(dof_handler.n_dofs());
+    Vector<double> stress_component_y(dof_handler.n_dofs());
+    Vector<double> stress_component_z(dof_handler.n_dofs());
+
+    // Project stress components onto the finite element space
+    QGauss<dim> quadrature_formula(fe.degree + 1);
+    FEValues<dim> fe_values(fe, quadrature_formula,
+                            update_values | update_gradients | update_quadrature_points | update_JxW_values);
+    unsigned int cell_index = 0;
+    for (const auto &cell : dof_handler.active_cell_iterators())
+    {
+        fe_values.reinit(cell);
+
+        // Compute an averaged stress over all quadrature points in the cell.
+        Tensor<2, dim> stress_avg;
+        stress_avg.clear();
+        double weight_sum = 0.0;
+
+        for (unsigned int q = 0; q < fe_values.n_quadrature_points; ++q)
+        {
+            // Compute strain at quadrature point q
+            SymmetricTensor<2, dim> strain_q;
+            for (unsigned int i = 0; i < dim; ++i)
+                for (unsigned int j = 0; j < dim; ++j)
+                {
+                    strain_q[i][j] = 0.0;
+                    for (unsigned int k = 0; k < fe_values.dofs_per_cell; ++k)
+                    {
+                        strain_q[i][j] += 0.5 * (fe_values.shape_grad(k, q)[i] * solution(fe_values.dof_indices()[k]) + fe_values.shape_grad(k, q)[j] * solution(fe_values.dof_indices()[k]));
+                    }
+                }
+
+            // Compute stress at quadrature point q using the module corresponding to q
+            Tensor<2, dim> stress_q = viscoelastic_modules[cell_index][q].get_stress(strain_q);
+            stress_avg += stress_q * fe_values.JxW(q);
+            weight_sum += fe_values.JxW(q);
+        }
+        stress_avg /= weight_sum;
+
+        // Now project the averaged stress components onto the DoFs.
+        // Here we interpolate the constant stress obtained over the cell.
+        for (unsigned int q = 0; q < fe_values.n_quadrature_points; ++q)
+        {
+            for (unsigned int i = 0; i < fe_values.dofs_per_cell; ++i)
+            {
+                stress_component_x(fe_values.dof_indices()[i]) += stress_avg[0][0] * fe_values.shape_value(i, q) * fe_values.JxW(q);
+                stress_component_y(fe_values.dof_indices()[i]) += stress_avg[1][1] * fe_values.shape_value(i, q) * fe_values.JxW(q);
+                stress_component_z(fe_values.dof_indices()[i]) += stress_avg[2][2] * fe_values.shape_value(i, q) * fe_values.JxW(q);
+            }
+        }
+        ++cell_index;
+    }
+
+    // Add projected stress components as scalar fields
+    data_out.add_data_vector(stress_component_x, "stress_x");
+    data_out.add_data_vector(stress_component_y, "stress_y");
+    data_out.add_data_vector(stress_component_z, "stress_z");
+
     data_out.build_patches();
-    std::ofstream output("solution-" + std::to_string(time) + ".vtk");
+
+    std::ofstream output("solution_" + std::to_string(time_step) + ".vtk");
     data_out.write_vtk(output);
 }
 template <int dim>
-void ViscoelasticFEM<dim>::run_simulation()
+void ViscoElasticFEM<dim>::run()
 {
-    setup_system();
-    initialize_material();
+    // Compute threshold time (30% of total simulation time)
+    const double total_sim_time = n_time_steps * delta_t;
+    const double T_thresh = 0.3 * total_sim_time;
+    // Define a target displacement equal to 0.1 (as before)
+    const double target_disp = 0.1;
+    // Compute the constant rate needed so that at T_thresh the displacement is target_disp.
+    const double pulling_rate = target_disp / T_thresh;
 
-    const double total_time = 0.5;
-    const double time_step = 0.005;
-    for (double time = 0.0; time <= total_time; time += time_step)
+    double amplitude_unused = 0.0; // no longer needed for right BC
+
+    for (time_step = 0; time_step < n_time_steps; ++time_step)
     {
-        apply_boundary_conditions(time);
-        solve_timestep(time);
-        output_results(time);
+        std::cout << "Time step " << time_step << std::endl;
+        double current_time = time_step * delta_t;
+
+        // Update constraints with both left (fixed) and right (constant rate) boundary conditions.
+        constraints.clear();
+        DoFTools::make_hanging_node_constraints(dof_handler, constraints);
+
+        FixedBoundary<dim> fixed_boundary;
+        VectorTools::interpolate_boundary_values(dof_handler, 0, fixed_boundary,
+                                                 constraints, ComponentMask({true, false, false}));
+
+        ConstantRateBoundary<dim> right_boundary(current_time, pulling_rate, T_thresh);
+        VectorTools::interpolate_boundary_values(dof_handler, 1, right_boundary,
+                                                 constraints);
+        constraints.close();
+
+        assemble_system();
+        solve();
+        output_results();
     }
 }
 int main()
 {
-    try
-    {
-        ViscoelasticFEM<2> simulation; // For 2D, change to <3> for 3D
-        simulation.run_simulation();
-    }
-    catch (std::exception &exc)
-    {
-        std::cerr << "Exception: " << exc.what() << std::endl;
-        return 1;
-    }
+    const unsigned int degree = 1;
+    const unsigned int n_global_refinements = 2;
+    ViscoElasticFEM<3> fem(degree, n_global_refinements);
+    fem.run();
     return 0;
 }

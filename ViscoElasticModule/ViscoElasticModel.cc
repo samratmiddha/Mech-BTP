@@ -146,7 +146,6 @@ public:
     }
     Tensor<2, dim> get_stress(SymmetricTensor<2, dim> e_e)
     {
-        std::cout << "debugging starts" << std::endl;
         int num_vis_elements = mat.num_vis_elements;
 
         vector<double> tau_r_v = mat.get_tau_r_v();
@@ -158,8 +157,6 @@ public:
 
         Tensor<4, dim> c_bulk_eq = K_eq * StandardTensors<dim>::II_vol;
         Tensor<4, dim> c_shear_eq = 2.0 * mu_eq * StandardTensors<dim>::II_dev;
-        std::cout << "c_bulk_eq = " << c_bulk_eq << std::endl;
-        std::cout << "c_shear_eq = " << c_shear_eq << std::endl;
         Tensor<4, dim> c_bulk_vis;
         Tensor<4, dim> c_shear_vis;
         Tensor<2, dim> sigma_vis_2_vol;
