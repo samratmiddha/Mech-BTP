@@ -212,27 +212,6 @@ public:
         }
         return mu_vis;
     }
-    // double get_modulus(double time) const
-    // {
-    //     // Equilibrium modulus (long-term elastic response)
-    //     double modulus = mat_viscous_prop_eq[1];
-    //     vector<double> mu_vis(num_vis_elements);
-    //     for (int i = 0; i < num_vis_elements; i++)
-    //     {
-    //         mu_vis[i] = mat_viscous_prop[i][1];
-    //     }
-    //     vector<double> tau_r_v(num_vis_elements);
-    //     for (int i = 0; i < num_vis_elements; i++)
-    //     {
-    //         tau_r_v[i] = mat_viscous_prop[i][2];
-    //     }
-    //     for (int i = 0; i < num_vis_elements; ++i)
-    //     {
-    //         modulus += mu_vis[i] * std::exp(-time / tau_r_v[i]);
-    //     }
-
-    //     return modulus;
-    // }
 };
 
 // ---------------------------------------- viscoelastic module --------------------------------------------- //
@@ -302,7 +281,6 @@ public:
         double sigma_fact_v;
         Tensor<2, dim> alpha_dev_hist_tensor;
 
-        double e_v = 0.0;
         Tensor<2, dim> e_dev;
         for (unsigned int i = 0; i < dim; ++i)
             for (unsigned int j = 0; j < dim; ++j)
@@ -311,19 +289,15 @@ public:
                         e_dev[i][j] += StandardTensors<dim>::Iden4_dev[i][j][k][l] * e_e[k][l];
 
         // calculate e_vol;
-        for (unsigned int i = 0; i < dim; ++i)
+        double e_v = 0.0;
+        for (int i = 0; i < dim; ++i)
         {
-            e_v += e_e[i][i] * StandardTensors<dim>::del[i][i];
-            //  e_v += e_e[i][i];
+            for (int j = 0; j < dim; ++j)
+            {
+                e_v += e_e[i][j] * StandardTensors<dim>::del[i][j];
+            }
         }
-        e_v /= double(dim);
-        // changed
-        // e_dev = e_e - e_v * StandardTensors<dim>::del;
-        // e_dev = e_e;
-        // for (unsigned int i = 0; i < dim; i++)
-        // {
-        //     e_dev[i][i] -= e_v;
-        // }
+
         std::cout << "printing e_e" << std::endl;
         std::cout << e_e << std::endl;
         std::cout << "printing e_vol" << std::endl;
@@ -333,47 +307,6 @@ public:
         std::cout << "end" << std::endl;
         vector<Tensor<2, dim>> alpha_dev_curr(num_vis_elements);
         vector<double> alpha_vol_curr(num_vis_elements);
-        // for (int i = 0; i < num_vis_elements; i++)
-        // {
-        //     double tvr_dt = tau_d_v[i] / delta_t;
-        //     double his_d = (1.0 - exp(-delta_t / tau_d_v[i])) / (delta_t / tau_d_v[i]);
-        //     double his_d1 = exp(-delta_t / tau_d_v[i]);
-        //     // double his_d2 = 1.0 + tvr_dt;
-
-        //     // Compute stress relaxation contributions
-        //     sigma_vis_2_vol += (k_vis[i] * (his_d1 * alpha_vol_hist[i] + e_vol_hist * his_d - e_vol_hist)) * StandardTensors<dim>::del;
-        //     sigma_vis_2_dev += 2.0 * mu_vis[i] * (his_d1 * alpha_dev_hist[i] + e_dev_hist * his_d - e_dev_hist);
-
-        //     c_bulk_vis += k_vis[i] * his_d * StandardTensors<dim>::Ivol;
-        //     c_shear_vis += 2.0 * mu_vis[i] * his_d * StandardTensors<dim>::Iden4_dev;
-        // }
-
-        // // Tensor<2, dim> sigma_vis_1;
-        // // for (unsigned int i = 0; i < dim; ++i)
-        // //     for (unsigned int j = 0; j < dim; ++j)
-        // //         for (unsigned int k = 0; k < dim; ++k)
-        // //             for (unsigned int l = 0; l < dim; ++l)
-        // //                 sigma_vis_1[i][j] += (c_bulk_eq[i][j][k][l] + c_bulk_vis[i][j][k][l] + c_shear_eq[i][j][k][l] + c_shear_vis[i][j][k][l]) * e_e[k][l];
-
-        // // Final stress update
-        // // sigma_vis = sigma_vis_1 - sigma_vis_2_vol - sigma_vis_2_dev;
-        // sigma_vis = 2.0 * mu_eq * e_dev + sigma_vis_2_dev + sigma_vis_2_vol;
-
-        // // Update history variables
-        // for (int i = 0; i < num_vis_elements; i++)
-        // {
-        //     double his_d = (1.0 - exp(-delta_t / tau_d_v[i])) / (delta_t / tau_d_v[i]);
-        //     double his_d1 = exp(-delta_t / tau_d_v[i]);
-        //     alpha_dev_curr[i] = his_d1 * alpha_dev_hist[i] + (e_dev_hist - ((e_dev - e_dev_hist) / delta_t) * tau_d_v[i]) * his_d + (e_dev - e_dev_hist);
-        //     alpha_vol_curr[i] = his_d1 * alpha_vol_hist[i] + (e_vol_hist - ((e_v - e_vol_hist) / delta_t) * tau_d_v[i]) * his_d + (e_v - e_vol_hist);
-        // }
-
-        // alpha_vol_hist = alpha_vol_curr;
-        // alpha_dev_hist = alpha_dev_curr;
-        // e_vol_hist = e_v;
-        // e_dev_hist = e_dev;
-
-        // return sigma_vis;
 
         for (int i = 0; i < num_vis_elements; i++)
         {
@@ -477,15 +410,15 @@ int main()
     Tensor<2, dim> strain_3d;
 
     // Initialize the strain tensor with constant values
-    strain_3d[0][0] = 0.015; // epsilon_xx
-    strain_3d[0][1] = 0.0;
+    strain_3d[0][0] = 0.0; // epsilon_xx
+    strain_3d[0][1] = 0.015;
     strain_3d[0][2] = 0.0;
     strain_3d[1][0] = 0.0;
-    strain_3d[1][1] = 0.015;
+    strain_3d[1][1] = 0.0;
     strain_3d[1][2] = 0.0;
     strain_3d[2][0] = 0.0;
     strain_3d[2][1] = 0.0;
-    strain_3d[2][2] = 0.015;
+    strain_3d[2][2] = 0.0;
     // test standard tensors
     std::cout << StandardTensors<dim>::del << std::endl;
     std::cout << StandardTensors<dim>::Iden4 << std::endl;
@@ -507,8 +440,9 @@ int main()
 
     vector<Tensor<2, dim>> ans;
 
-    double k_eq = mat.get_k_eq();
-    double p_eq = k_eq * ((strain_3d[0][0] + strain_3d[1][1] + strain_3d[2][2]) / 3);
+    double mu_eq = mat.get_mu_eq();
+    // double p_eq = k_eq * ((strain_3d[0][0] + strain_3d[1][1] + strain_3d[2][2]));
+    double p_eq = 2 * mu_eq * (strain_3d[0][1]);
     // double p_eq = k_eq * (strain_temp[0][0] + strain_temp[1][1] + strain_temp[2][2]) / 3;
 
     vector<double> p;
@@ -517,7 +451,8 @@ int main()
         strain_temp = (1 / 100.0) * double(std::min(i, 100)) * strain_3d;
         // strain_temp = (i / 1000.0) * strain_3d;
         ans.push_back(visModel.get_stress(strain_temp));
-        p.push_back((ans[i][0][0] + ans[i][1][1] + ans[i][2][2]) / 3);
+        // p.push_back((ans[i][0][0] + ans[i][1][1] + ans[i][2][2]) / 3);
+        p.push_back(ans[i][0][1]);
     }
     for (int i = 0; i < 1000; i++)
     {
@@ -527,6 +462,6 @@ int main()
         std::cout << p[i] / p_eq << ",";
     }
     std::cout << "printing p eq" << std::endl;
-    std::cout << k_eq << std::endl;
+    std::cout << mu_eq << std::endl;
     std::cout << p_eq << std::endl;
 }

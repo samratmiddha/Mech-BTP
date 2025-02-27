@@ -1,3 +1,4 @@
+
 #include <deal.II/base/quadrature_lib.h>
 #include <deal.II/base/function.h>
 #include <deal.II/base/logstream.h>
@@ -47,47 +48,78 @@ using namespace dealii;
 using std::vector;
 
 // --------------------------------- Standard Tensors ----------------------------------------------------- //
+
+#include <deal.II/base/tensor.h>
+
+using namespace dealii;
+
 template <int dim>
 class StandardTensors
 {
 public:
-    static const SymmetricTensor<2, dim> I;
-    static const SymmetricTensor<2, dim> I_vol;
-    static const SymmetricTensor<2, dim> I_dev;
-    static const SymmetricTensor<4, dim> IxI;
-    static const SymmetricTensor<4, dim> II;
-    static const SymmetricTensor<4, dim> II_dev;
-    static const SymmetricTensor<4, dim> II_vol;
+    static const Tensor<2, dim> del;
+    static const Tensor<4, dim> I_dya_I;
+    static const Tensor<4, dim> Iden4;
+    static const Tensor<4, dim> Iden4_dev;
+    static const Tensor<4, dim> Ivol;
+
+    static Tensor<2, dim> KroneckerDelta()
+    {
+        Tensor<2, dim> delta;
+        for (unsigned int i = 0; i < dim; ++i)
+            delta[i][i] = 1.0;
+        return delta;
+    }
+
+    static Tensor<4, dim> DyadicProduct_Type1(const Tensor<2, dim> &delta)
+    {
+        Tensor<4, dim> I_dya_I;
+        for (unsigned int i = 0; i < dim; ++i)
+            for (unsigned int j = 0; j < dim; ++j)
+                for (unsigned int k = 0; k < dim; ++k)
+                    for (unsigned int l = 0; l < dim; ++l)
+                        I_dya_I[i][j][k][l] = delta[i][j] * delta[k][l];
+        return I_dya_I;
+    }
+
+    static Tensor<4, dim> DyadicProduct_Type2(const Tensor<2, dim> &delta)
+    {
+        Tensor<4, dim> Iden4;
+        for (unsigned int i = 0; i < dim; ++i)
+            for (unsigned int j = 0; j < dim; ++j)
+                for (unsigned int k = 0; k < dim; ++k)
+                    for (unsigned int l = 0; l < dim; ++l)
+                        Iden4[i][j][k][l] = delta[i][k] * delta[j][l];
+        return Iden4;
+    }
+
+    static Tensor<4, dim> ComputeDeviatoricTensor(const Tensor<4, dim> &Iden4, const Tensor<4, dim> &I_dya_I)
+    {
+        Tensor<4, dim> Iden4_dev;
+        for (unsigned int i = 0; i < dim; ++i)
+            for (unsigned int j = 0; j < dim; ++j)
+                for (unsigned int k = 0; k < dim; ++k)
+                    for (unsigned int l = 0; l < dim; ++l)
+                        Iden4_dev[i][j][k][l] = Iden4[i][j][k][l] - (1.0 / dim) * I_dya_I[i][j][k][l];
+        return Iden4_dev;
+    }
 };
 
+// Definition of static members
 template <int dim>
-const SymmetricTensor<2, dim>
-    StandardTensors<dim>::I = unit_symmetric_tensor<dim>();
+const Tensor<2, dim> StandardTensors<dim>::del = StandardTensors<dim>::KroneckerDelta();
 
 template <int dim>
-const SymmetricTensor<2, dim>
-    StandardTensors<dim>::I_vol = (1.0 / dim) * I;
+const Tensor<4, dim> StandardTensors<dim>::I_dya_I = StandardTensors<dim>::DyadicProduct_Type1(StandardTensors<dim>::del);
 
 template <int dim>
-const SymmetricTensor<2, dim>
-    StandardTensors<dim>::I_dev = I - I_vol;
+const Tensor<4, dim> StandardTensors<dim>::Iden4 = StandardTensors<dim>::DyadicProduct_Type2(StandardTensors<dim>::del);
 
 template <int dim>
-const SymmetricTensor<4, dim>
-    StandardTensors<dim>::IxI = outer_product(I, I);
+const Tensor<4, dim> StandardTensors<dim>::Iden4_dev = StandardTensors<dim>::ComputeDeviatoricTensor(StandardTensors<dim>::Iden4, StandardTensors<dim>::I_dya_I);
 
 template <int dim>
-const SymmetricTensor<4, dim>
-    StandardTensors<dim>::II = outer_product(I, I);
-
-template <int dim>
-const SymmetricTensor<4, dim>
-    StandardTensors<dim>::II_vol = (1.0 / dim) * II;
-
-template <int dim>
-const SymmetricTensor<4, dim>
-    StandardTensors<dim>::II_dev = II - II_vol;
-
+const Tensor<4, dim> StandardTensors<dim>::Ivol = StandardTensors<dim>::I_dya_I;
 // ---------------------------------------- viscoelastic material --------------------------------------------- //
 template <int dim>
 class ViscoElasticMaterial
@@ -96,21 +128,39 @@ public:
     vector<vector<double>> mat_viscous_prop;
     vector<double> mat_viscous_prop_eq;
     int num_vis_elements;
+    double k_eq;
+    double mu_eq;
+    double e_eq;
+    double nu;
     ViscoElasticMaterial() {}
     ViscoElasticMaterial(vector<vector<double>> mat_viscous_prop, vector<double> mat_viscous_prop_eq)
     {
         this->mat_viscous_prop = mat_viscous_prop;
         this->mat_viscous_prop_eq = mat_viscous_prop_eq;
+        e_eq = mat_viscous_prop_eq[0];
+        nu = mat_viscous_prop_eq[1];
+        mu_eq = e_eq / (2.0 * (1.0 + nu));
+        k_eq = e_eq / (3.0 * (1.0 - (2.0 * nu)));
+
         num_vis_elements = mat_viscous_prop.size();
     }
-    double get_rho()
+    double get_youngs_modulus()
     {
-        return mat_viscous_prop_eq[0];
+        return e_eq;
     }
-    double get_cv()
+    double get_poisson_ratio()
     {
-        return mat_viscous_prop_eq[3];
+        return nu;
     }
+    double get_k_eq()
+    {
+        return k_eq;
+    }
+    double get_mu_eq()
+    {
+        return mu_eq;
+    }
+
     vector<double> get_tau_d_v()
     {
         vector<double> tau_d_v(num_vis_elements);
@@ -129,52 +179,34 @@ public:
         }
         return tau_r_v;
     }
-    vector<double> get_mu_vis()
+    vector<double> get_e_vis()
     {
-        vector<double> mu_vis(num_vis_elements);
+        vector<double> e_vis(num_vis_elements);
         for (int i = 0; i < num_vis_elements; i++)
         {
-            mu_vis[i] = mat_viscous_prop[i][1];
+            e_vis[i] = mat_viscous_prop[i][1];
         }
-        return mu_vis;
+        return e_vis;
     }
     vector<double> get_k_vis()
     {
+        vector<double> e_vis = this->get_e_vis();
         vector<double> k_vis(num_vis_elements);
         for (int i = 0; i < num_vis_elements; i++)
         {
-            k_vis[i] = mat_viscous_prop[i][3];
+            k_vis[i] = e_vis[i] / (3.0 * (1.0 - 2.0 * nu));
         }
         return k_vis;
     }
-    double get_mu_eq()
+    vector<double> get_mu_vis()
     {
-        return mat_viscous_prop_eq[1];
-    }
-    double get_k_eq()
-    {
-        return mat_viscous_prop_eq[2];
-    }
-    double get_modulus(double time) const
-    {
-        // Equilibrium modulus (long-term elastic response)
-        double modulus = mat_viscous_prop_eq[1];
+        vector<double> e_vis = this->get_e_vis();
         vector<double> mu_vis(num_vis_elements);
         for (int i = 0; i < num_vis_elements; i++)
         {
-            mu_vis[i] = mat_viscous_prop[i][1];
+            mu_vis[i] = 0.5 * (e_vis[i] / (1.0 + nu));
         }
-        vector<double> tau_r_v(num_vis_elements);
-        for (int i = 0; i < num_vis_elements; i++)
-        {
-            tau_r_v[i] = mat_viscous_prop[i][2];
-        }
-        for (int i = 0; i < num_vis_elements; ++i)
-        {
-            modulus += mu_vis[i] * std::exp(-time / tau_r_v[i]);
-        }
-
-        return modulus;
+        return mu_vis;
     }
 };
 
@@ -187,9 +219,11 @@ public:
     vector<double> alpha_vol_hist;
     Tensor<2, dim> e_dev_hist;
     double e_vol_hist;
-    double delta_t = 0.005;
+    double delta_t = 0.00108;
+    // double delta_t;
     ViscoElasticMaterial<dim> mat;
     Tensor<4, dim> c_ijkl_vis;
+    Tensor<2, dim> sigma_vis;
 
     ViscoElasticModule() {};
     ViscoElasticModule(ViscoElasticMaterial<dim> &mat, double delta_t)
@@ -198,6 +232,8 @@ public:
         this->delta_t = delta_t;
         alpha_dev_hist.resize(mat.num_vis_elements);
         alpha_vol_hist.resize(mat.num_vis_elements, 0.0);
+        e_dev_hist = 0.0;
+        e_vol_hist = 0.0;
     }
     ~ViscoElasticModule() {};
     void setDelta(double d)
@@ -210,50 +246,60 @@ public:
         this->mat = mat;
         alpha_dev_hist.resize(mat.num_vis_elements);
         alpha_vol_hist.resize(mat.num_vis_elements, 0.0);
+        e_dev_hist = 0.0;
+        e_vol_hist = 0.0;
     }
     Tensor<4, dim> get_stiffness_tensor()
     {
         return c_ijkl_vis;
     }
 
-    Tensor<2, dim> get_stress(SymmetricTensor<2, dim> e_e)
+    Tensor<2, dim> get_stress(Tensor<2, dim> e_e)
     {
         int num_vis_elements = mat.num_vis_elements;
 
         vector<double> tau_r_v = mat.get_tau_r_v();
         vector<double> tau_d_v = mat.get_tau_d_v();
+        vector<double> e_vis = mat.get_e_vis();
         vector<double> mu_vis = mat.get_mu_vis();
         vector<double> k_vis = mat.get_k_vis();
-        double K_eq = mat.get_k_eq();
-        double mu_eq = mat.get_k_eq();
+        double k_eq = mat.get_k_eq();
+        double mu_eq = mat.get_mu_eq();
 
-        Tensor<4, dim> c_bulk_eq = K_eq * StandardTensors<dim>::II_vol;
-        Tensor<4, dim> c_shear_eq = 2.0 * mu_eq * StandardTensors<dim>::II_dev;
+        Tensor<4, dim> c_bulk_eq = k_eq * StandardTensors<dim>::Ivol;
+        Tensor<4, dim> c_shear_eq = 2.0 * mu_eq * StandardTensors<dim>::Iden4_dev;
         Tensor<4, dim> c_bulk_vis;
         Tensor<4, dim> c_shear_vis;
+        Tensor<2, dim> sigma_vis_1;
+        Tensor<2, dim> sigma_vis_2;
         Tensor<2, dim> sigma_vis_2_vol;
         Tensor<2, dim> sigma_vis_2_dev;
+        double sigma_fact_v;
+        Tensor<2, dim> alpha_dev_hist_tensor;
 
-        double e_vol;
         Tensor<2, dim> e_dev;
-        Tensor<2, dim> e_vol_tensor;
-
         for (unsigned int i = 0; i < dim; ++i)
             for (unsigned int j = 0; j < dim; ++j)
                 for (unsigned int k = 0; k < dim; ++k)
                     for (unsigned int l = 0; l < dim; ++l)
-                        e_dev[i][j] += StandardTensors<dim>::II_dev[i][j][k][l] * e_e[k][l];
+                        e_dev[i][j] += StandardTensors<dim>::Iden4_dev[i][j][k][l] * e_e[k][l];
 
         // calculate e_vol;
-        for (unsigned int i = 0; i < dim; ++i)
-            for (unsigned int j = 0; j < dim; ++j)
-                e_vol += e_e[i][j] * StandardTensors<dim>::I[i][j];
+        double e_v = 0.0;
+        for (int i = 0; i < dim; ++i)
+        {
+            for (int j = 0; j < dim; ++j)
+            {
+                e_v += e_e[i][j] * StandardTensors<dim>::del[i][j];
+            }
+        }
 
         vector<Tensor<2, dim>> alpha_dev_curr(num_vis_elements);
         vector<double> alpha_vol_curr(num_vis_elements);
 
         for (int i = 0; i < num_vis_elements; i++)
         {
+            tau_r_v[i] = tau_d_v[i];
             double tvr_dt = tau_r_v[i] / delta_t;
             double tdr_dt = tau_d_v[i] / delta_t;
 
@@ -261,60 +307,52 @@ public:
             double his_d = 1.0 - exp(-1 * (delta_t / tau_d_v[i]));
 
             double his_v1 = exp(-1 * (delta_t / tau_r_v[i]));
-            double his_d1 = exp(-1 * (delta_t / tau_r_v[i]));
+            double his_d1 = exp(-1 * (delta_t / tau_d_v[i]));
 
             double his_v2 = 1.0 + tvr_dt;
             double his_d2 = 1.0 + tdr_dt;
 
-            c_bulk_vis += static_cast<dealii::Tensor<4, dim>>(k_vis[i] * tvr_dt * his_v * StandardTensors<dim>::II_vol);
-            c_shear_vis += static_cast<dealii::Tensor<4, dim>>(2.0 * mu_vis[i] * tdr_dt * his_d * StandardTensors<dim>::II_dev);
+            c_bulk_vis += k_vis[i] * tvr_dt * his_v * StandardTensors<dim>::Ivol;
+            c_shear_vis += 2.0 * mu_vis[i] * tdr_dt * his_d * StandardTensors<dim>::Iden4_dev;
 
-            sigma_vis_2_vol += static_cast<dealii::Tensor<2, dim>>(k_vis[i] * (his_v1 * alpha_vol_hist[i] + e_vol_hist * his_v2 * his_v - e_vol_hist) * StandardTensors<dim>::I);
+            sigma_vis_2_vol += k_vis[i] * (his_v1 * alpha_vol_hist[i] + e_vol_hist * his_v2 * his_v - e_vol_hist) * StandardTensors<dim>::del;
 
             sigma_vis_2_dev += 2.0 * mu_vis[i] * (his_d1 * alpha_dev_hist[i] + e_dev_hist * his_d2 * his_d - e_dev_hist);
         }
 
-        Tensor<2, dim> sigma_vis_2 = sigma_vis_2_dev;
+        sigma_vis_2 = sigma_vis_2_vol + sigma_vis_2_dev;
 
-        c_ijkl_vis = c_shear_eq + c_shear_vis;
+        c_ijkl_vis = c_bulk_eq + c_bulk_vis + c_shear_eq + c_shear_vis;
 
-        Tensor<2, dim> sigma_vis_1;
-
-        for (int i = 0; i < dim; ++i)
-        {
-            for (int j = 0; j < dim; ++j)
-            {
-                for (int k = 0; k < dim; ++k)
-                {
-                    sigma_vis_1[i][j] += c_ijkl_vis[i][j][k][k] * e_e[k][k];
-                }
-            }
-        }
+        for (unsigned int i = 0; i < dim; ++i)
+            for (unsigned int j = 0; j < dim; ++j)
+                for (unsigned int k = 0; k < dim; ++k)
+                    for (unsigned int l = 0; l < dim; ++l)
+                        sigma_vis_1[i][j] += c_ijkl_vis[i][j][k][l] * e_e[k][l];
 
         Tensor<2, dim> sigma_vis = sigma_vis_1 - sigma_vis_2;
 
         for (int i = 0; i < num_vis_elements; i++)
         {
             double his_d1 = exp(-1 * (delta_t) / tau_d_v[i]);
-            double his_d = 1.0 - exp(-delta_t / tau_d_v[i]);
+            double his_d = 1.0 - exp(-1 * delta_t / tau_d_v[i]);
 
-            alpha_dev_curr[i] = his_d1 * alpha_dev_hist[i] + (e_dev_hist - ((e_dev - e_dev_hist) / delta_t) * tau_d_v[i]) * his_d + e_dev - e_dev_hist;
+            alpha_dev_curr[i] = his_d1 * alpha_dev_hist[i] + (e_dev_hist - ((e_dev - e_dev_hist) / delta_t) * tau_d_v[i]) * his_d + (e_dev - e_dev_hist);
 
             double his_v1 = exp(-1 * (delta_t) / tau_r_v[i]);
             double his_v = 1.0 - exp(-1 * (delta_t) / tau_r_v[i]);
 
-            alpha_vol_curr[i] = his_v1 * alpha_vol_hist[i] + (e_vol_hist - ((e_vol - e_vol_hist) / delta_t)) * his_v + (e_vol - e_vol_hist);
+            alpha_vol_curr[i] = his_v1 * alpha_vol_hist[i] + (e_vol_hist - ((e_v - e_vol_hist) / delta_t) * tau_r_v[i]) * his_v + (e_v - e_vol_hist);
         }
 
         alpha_vol_hist = alpha_vol_curr;
         alpha_dev_hist = alpha_dev_curr;
-        e_vol_hist = e_vol;
+        e_vol_hist = e_v;
         e_dev_hist = e_dev;
 
         return sigma_vis;
     }
 };
-
 // ---------------------------------------- get strain -------------------------------------------------------//
 #include <deal.II/base/quadrature_lib.h>
 #include <deal.II/base/function.h>
@@ -438,8 +476,8 @@ ViscoElasticFEM<dim>::ViscoElasticFEM(const unsigned int degree, const unsigned 
       time_step(0),
       n_time_steps(100)
 {
-    std::vector<std::vector<double>> mat_viscous_prop = {{0.005, 0.6, 0.01, 2.0}, {0.05, 0.4, 0.1, 1.5}, {0.2, 0.3, 0.5, 1.0}, {0.5, 0.2, 1.0, 0.6}, {1.0, 0.1, 5.0, 0.4}};
-    std::vector<double> mat_viscous_prop_eq = {1, 0.5, 0.1, 1.0};
+    std::vector<std::vector<double>> mat_viscous_prop = {{0.108, 82100000, 0.108}};
+    std::vector<double> mat_viscous_prop_eq = {356960000, 0.35};
     material = ViscoElasticMaterial<dim>(mat_viscous_prop, mat_viscous_prop_eq);
 
     // Initialize the grid
