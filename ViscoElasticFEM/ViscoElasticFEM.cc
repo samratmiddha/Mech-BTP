@@ -400,42 +400,51 @@ public:
 using namespace dealii;
 
 template <int dim>
-class FixedBoundary : public Function<dim>
+class MovingBoundary : public Function<dim>
 {
 public:
-    FixedBoundary() : Function<dim>(dim) {}
-    virtual void vector_value(const Point<dim> &p, Vector<double> &values) const override
+    // Constructor accepts the current time, total number of time steps, and delta_t.
+    MovingBoundary(const double time,
+                   const unsigned int n_time_steps,
+                   const double delta_t)
+        : Function<dim>(dim), current_time(time),
+          total_time_steps(n_time_steps), dt(delta_t)
     {
-        AssertDimension(values.size(), this->n_components);
-        for (unsigned int i = 0; i < this->n_components; ++i)
-            values[i] = 0.0;
     }
-};
 
-template <int dim>
-class ConstantRateBoundary : public Function<dim>
-{
-public:
-    ConstantRateBoundary(double time, double rate, double T_thresh)
-        : Function<dim>(dim), time(time), rate(rate), T_thresh(T_thresh) {}
-
-    virtual void vector_value(const Point<dim> &p, Vector<double> &values) const override
+    // Update the current time in the function
+    void set_time(const double new_time)
     {
-        AssertDimension(values.size(), this->n_components);
-        for (unsigned int i = 0; i < this->n_components; ++i)
-            values[i] = 0.0;
-        // Apply on the right face: x = 1
-        if (std::abs(p[0] - 1.0) < 1e-6)
+        current_time = new_time;
+    }
+
+    // Compute the displacement value: linearly increasing until max 0.2 is reached,
+    // then stays at 0.2.
+    virtual double value(const Point<dim> &p,
+                         const unsigned int component = 0) const override
+    {
+        if (component == 0)
         {
-            double disp = (time <= T_thresh ? rate * time : rate * T_thresh);
-            values[0] = disp;
+            // Compute the ramp time (i.e. the time at which maximum displacement is reached)
+            const double ramp_time = (total_time_steps / 10.0) * dt;
+            if (current_time < ramp_time)
+            {
+                // Linear ramp: displacement increases linearly until it reaches 0.2
+                return (0.2 / ramp_time) * current_time;
+            }
+            else
+            {
+                // After the ramp, the displacement remains constant at 0.2
+                return 0.2;
+            }
         }
+        return 0.0;
     }
 
 private:
-    double time;     // current time
-    double rate;     // constant pulling rate (computed so that at T_thresh displacement = target)
-    double T_thresh; // threshold time after which displacement remains constant
+    double current_time;
+    unsigned int total_time_steps;
+    double dt;
 };
 
 template <int dim>
@@ -448,12 +457,13 @@ public:
 private:
     void make_grid();
     void setup_system();
+    void update_constraints();
     void assemble_system();
     void solve();
     void output_results();
 
     Triangulation<dim> triangulation;
-    FESystem<dim> fe; // Use FESystem instead of FE_Q
+    FESystem<dim> fe;
     DoFHandler<dim> dof_handler;
     AffineConstraints<double> constraints;
     SparsityPattern sparsity_pattern;
@@ -508,18 +518,42 @@ ViscoElasticFEM<dim>::ViscoElasticFEM(const unsigned int degree, const unsigned 
 template <int dim>
 void ViscoElasticFEM<dim>::make_grid()
 {
-    GridGenerator::hyper_rectangle(triangulation,
-                                   Point<dim>(-1, -1, -1), Point<dim>(1, 1, 1));
-    // Mark boundary ids: left face: x=-1 as 0, right face: x=1 as 1.
-    for (auto &cell : triangulation.active_cell_iterators())
-        for (unsigned int face = 0; face < GeometryInfo<dim>::faces_per_cell; ++face)
+    GridGenerator::hyper_rectangle(triangulation, Point<dim>(-1, -1, -1), Point<dim>(1, 1, 1));
+    for (auto cell : triangulation.active_cell_iterators())
+    {
+        if (cell->at_boundary())
         {
-            const Point<dim> face_center = cell->face(face)->center();
-            if (std::abs(face_center[0] + 1.0) < 1e-6)
-                cell->face(face)->set_boundary_id(0);
-            else if (std::abs(face_center[0] - 1.0) < 1e-6)
-                cell->face(face)->set_boundary_id(1);
+            for (unsigned int f = 0; f < GeometryInfo<dim>::faces_per_cell; ++f)
+                if (cell->face(f)->at_boundary())
+                {
+                    const Point<dim> face_center = cell->face(f)->center();
+
+                    // face with y = -1
+                    if (face_center[1] == -1)
+                        cell->face(f)->set_boundary_id(1);
+
+                    // face with y = 1
+                    else if (face_center[1] == 1)
+                        cell->face(f)->set_boundary_id(2);
+
+                    // face with x = -1
+                    else if (face_center[0] == -1)
+                        cell->face(f)->set_boundary_id(3);
+
+                    // face with x = 1
+                    else if (face_center[0] == 1)
+                        cell->face(f)->set_boundary_id(4);
+
+                    // face with z = -1
+                    else if (face_center[2] == -1)
+                        cell->face(f)->set_boundary_id(5);
+
+                    // face with z = 1
+                    else if (face_center[2] == 1)
+                        cell->face(f)->set_boundary_id(6);
+                }
         }
+    }
 }
 
 template <int dim>
@@ -528,16 +562,62 @@ void ViscoElasticFEM<dim>::setup_system()
     dof_handler.distribute_dofs(fe);
     std::cout << "Number of degrees of freedom: " << dof_handler.n_dofs() << std::endl;
 
+    // --- Apply boundary conditions ---
+
+    // Compute the current simulation time (assuming time_step starts at 0)
     constraints.clear();
-    DoFTools::make_hanging_node_constraints(dof_handler, constraints);
+    double current_time = time_step * delta_t;
 
-    // Apply fixed boundary condition on the left face (boundary id 0)
-    FixedBoundary<dim> fixed_boundary;
-    VectorTools::interpolate_boundary_values(dof_handler, 0, fixed_boundary,
-                                             constraints, ComponentMask({true, false, false}));
+    // 1. Fixed boundary (all components zero) on face with boundary id 3 (x = -1)
+    VectorTools::interpolate_boundary_values(dof_handler,
+                                             3,
+                                             dealii::Functions::ZeroFunction<dim>(dim),
+                                             constraints);
 
-    // (For now, the right face BC will be applied at each time step via run())
+    // 2. Moving boundary (prescribed x displacement) on face with boundary id 4 (x = 1)
+    // Here, we only constrain the x component.
+    std::vector<bool> mask(dim, false);
+    mask[0] = true; // Only the x-component is prescribed
+    MovingBoundary<dim> moving_boundary(current_time, n_time_steps, delta_t);
+    VectorTools::interpolate_boundary_values(dof_handler,
+                                             4,
+                                             moving_boundary,
+                                             constraints,
+                                             mask);
+
+    // 3. Roller constraints on faces with boundary ids 1, 2, 5, and 6.
+    //    These constraints only fix the normal component.
+    // For boundaries 1 and 2 (y = -1 and y = 1), fix the y displacement.
+    mask.assign(dim, false);
+    mask[1] = true; // Constrain only the y component
+    VectorTools::interpolate_boundary_values(dof_handler,
+                                             1,
+                                             dealii::Functions::ZeroFunction<dim>(dim),
+                                             constraints,
+                                             mask);
+    VectorTools::interpolate_boundary_values(dof_handler,
+                                             2,
+                                             dealii::Functions::ZeroFunction<dim>(dim),
+                                             constraints,
+                                             mask);
+
+    // For boundaries 5 and 6 (z = -1 and z = 1), fix the z displacement.
+    mask.assign(dim, false);
+    mask[2] = true; // Constrain only the z component
+    VectorTools::interpolate_boundary_values(dof_handler,
+                                             5,
+                                             dealii::Functions::ZeroFunction<dim>(dim),
+                                             constraints,
+                                             mask);
+    VectorTools::interpolate_boundary_values(dof_handler,
+                                             6,
+                                             dealii::Functions::ZeroFunction<dim>(dim),
+                                             constraints,
+                                             mask);
+
+    // Finalize constraints
     constraints.close();
+
     DynamicSparsityPattern dsp(dof_handler.n_dofs());
     DoFTools::make_sparsity_pattern(dof_handler, dsp, constraints, false);
     sparsity_pattern.copy_from(dsp);
@@ -653,87 +733,103 @@ void ViscoElasticFEM<dim>::output_results()
             // Compute strain at quadrature point q
             SymmetricTensor<2, dim> strain_q;
             for (unsigned int i = 0; i < dim; ++i)
-                for (unsigned int j = 0; j < dim; ++j)
+                s for (unsigned int q = 0; q < fe_values.n_quadrature_points; ++q)
                 {
-                    strain_q[i][j] = 0.0;
-                    for (unsigned int k = 0; k < fe_values.dofs_per_cell; ++k)
+                    for (unsigned int i = 0; i < fe_values.dofs_per_cell; ++i)
                     {
-                        strain_q[i][j] += 0.5 * (fe_values.shape_grad(k, q)[i] * solution(fe_values.dof_indices()[k]) + fe_values.shape_grad(k, q)[j] * solution(fe_values.dof_indices()[k]));
+                        stress_component_x(fe_values.dof_indices()[i]) += stress_avg[0][0] * fe_values.shape_value(i, q) * fe_values.JxW(q);
+                        stress_component_y(fe_values.dof_indices()[i]) += stress_avg[1][1] * fe_values.shape_value(i, q) * fe_values.JxW(q);
+                        stress_component_z(fe_values.dof_indices()[i]) += stress_avg[2][2] * fe_values.shape_value(i, q) * fe_values.JxW(q);
                     }
                 }
-
-            // Compute stress at quadrature point q using the module corresponding to q
-            Tensor<2, dim> stress_q = viscoelastic_modules[cell_index][q].get_stress(strain_q);
-            stress_avg += stress_q * fe_values.JxW(q);
-            weight_sum += fe_values.JxW(q);
+            ++cell_index;
         }
-        stress_avg /= weight_sum;
 
-        // Now project the averaged stress components onto the DoFs.
-        // Here we interpolate the constant stress obtained over the cell.
-        for (unsigned int q = 0; q < fe_values.n_quadrature_points; ++q)
-        {
-            for (unsigned int i = 0; i < fe_values.dofs_per_cell; ++i)
-            {
-                stress_component_x(fe_values.dof_indices()[i]) += stress_avg[0][0] * fe_values.shape_value(i, q) * fe_values.JxW(q);
-                stress_component_y(fe_values.dof_indices()[i]) += stress_avg[1][1] * fe_values.shape_value(i, q) * fe_values.JxW(q);
-                stress_component_z(fe_values.dof_indices()[i]) += stress_avg[2][2] * fe_values.shape_value(i, q) * fe_values.JxW(q);
-            }
-        }
-        ++cell_index;
+        // Add projected stress components as scalar fields
+        data_out.add_data_vector(stress_component_x, "stress_x");
+        data_out.add_data_vector(stress_component_y, "stress_y");
+        data_out.add_data_vector(stress_component_z, "stress_z");
+
+        data_out.build_patches();
+
+        std::ofstream output("solution_" + std::to_string(time_step) + ".vtk");
+        data_out.write_vtk(output);
     }
 
-    // Add projected stress components as scalar fields
-    data_out.add_data_vector(stress_component_x, "stress_x");
-    data_out.add_data_vector(stress_component_y, "stress_y");
-    data_out.add_data_vector(stress_component_z, "stress_z");
-
-    data_out.build_patches();
-
-    std::ofstream output("solution_" + std::to_string(time_step) + ".vtk");
-    data_out.write_vtk(output);
-}
-template <int dim>
-void ViscoElasticFEM<dim>::run()
-{
-    // Compute threshold time (30% of total simulation time)
-    const double total_sim_time = n_time_steps * delta_t;
-    const double T_thresh = 0.3 * total_sim_time;
-    // Define a target displacement equal to 0.1 (as before)
-    const double target_disp = 0.1;
-    // Compute the constant rate needed so that at T_thresh the displacement is target_disp.
-    const double pulling_rate = target_disp / T_thresh;
-
-    double amplitude_unused = 0.0; // no longer needed for right BC
-
-    for (time_step = 0; time_step < n_time_steps; ++time_step)
+    template <int dim>
+    void ViscoElasticFEM<dim>::update_constraints()
     {
-        std::cout << "Time step " << time_step << std::endl;
+        // Clear previous constraints
+        constraints.clear();
+        // Compute the current simulation time (assuming time_step starts at 0)
         double current_time = time_step * delta_t;
 
-        // Update constraints with both left (fixed) and right (constant rate) boundary conditions.
-        constraints.clear();
-        DoFTools::make_hanging_node_constraints(dof_handler, constraints);
-
-        FixedBoundary<dim> fixed_boundary;
-        VectorTools::interpolate_boundary_values(dof_handler, 0, fixed_boundary,
-                                                 constraints, ComponentMask({true, false, false}));
-
-        ConstantRateBoundary<dim> right_boundary(current_time, pulling_rate, T_thresh);
-        VectorTools::interpolate_boundary_values(dof_handler, 1, right_boundary,
+        // 1. Fixed boundary (all components zero) on face with boundary id 3 (x = -1)
+        VectorTools::interpolate_boundary_values(dof_handler,
+                                                 3,
+                                                 dealii::Functions::ZeroFunction<dim>(dim),
                                                  constraints);
-        constraints.close();
 
-        assemble_system();
-        solve();
-        output_results();
+        // 2. Moving boundary (time-dependent prescribed x displacement) on face with boundary id 4 (x = 1)
+        // Only the x-component (component 0) is constrained.
+        std::vector<bool> mask(dim, false);
+        mask[0] = true;
+        MovingBoundary<dim> moving_boundary(current_time, n_time_steps, delta_t);
+        VectorTools::interpolate_boundary_values(dof_handler,
+                                                 4,
+                                                 moving_boundary,
+                                                 constraints,
+                                                 mask);
+
+        // 3. Roller constraints on the remaining boundaries:
+        // For boundaries 1 and 2 (y = -1 and y = 1), fix the y displacement.
+        mask.assign(dim, false);
+        mask[1] = true;
+        VectorTools::interpolate_boundary_values(dof_handler,
+                                                 1,
+                                                 dealii::Functions::ZeroFunction<dim>(dim),
+                                                 constraints,
+                                                 mask);
+        VectorTools::interpolate_boundary_values(dof_handler,
+                                                 2,
+                                                 dealii::Functions::ZeroFunction<dim>(dim),
+                                                 constraints,
+                                                 mask);
+
+        // For boundaries 5 and 6 (z = -1 and z = 1), fix the z displacement.
+        mask.assign(dim, false);
+        mask[2] = true;
+        VectorTools::interpolate_boundary_values(dof_handler,
+                                                 5,
+                                                 dealii::Functions::ZeroFunction<dim>(dim),
+                                                 constraints,
+                                                 mask);
+        VectorTools::interpolate_boundary_values(dof_handler,
+                                                 6,
+                                                 dealii::Functions::ZeroFunction<dim>(dim),
+                                                 constraints,
+                                                 mask);
+
+        // Finalize the constraint setup
+        constraints.close();
     }
-}
-int main()
-{
-    const unsigned int degree = 1;
-    const unsigned int n_global_refinements = 2;
-    ViscoElasticFEM<3> fem(degree, n_global_refinements);
-    fem.run();
-    return 0;
-}
+
+    template <int dim>
+    void ViscoElasticFEM<dim>::run()
+    {
+        for (time_step = 0; time_step < n_time_steps; ++time_step)
+        {
+            update_constraints();
+            assemble_system();
+            solve();
+            output_results();
+        }
+    }
+    int main()
+    {
+        const unsigned int degree = 1;
+        const unsigned int n_global_refinements = 2;
+        ViscoElasticFEM<3> fem(degree, n_global_refinements);
+        fem.run();
+        return 0;
+    }

@@ -223,7 +223,7 @@ public:
     vector<double> alpha_vol_hist;
     Tensor<2, dim> e_dev_hist;
     double e_vol_hist;
-    double delta_t = 0.00108;
+    double delta_t = 0.531744;
     // double delta_t;
     ViscoElasticMaterial<dim> mat;
     Tensor<4, dim> c_ijkl_vis;
@@ -342,9 +342,6 @@ public:
                         sigma_vis_1[i][j] += c_ijkl_vis[i][j][k][l] * e_e[k][l];
 
         Tensor<2, dim> sigma_vis = sigma_vis_1 - sigma_vis_2;
-        // std::cout << "sigma_vis_1-------" << sigma_vis_1 << std::endl;
-        // std::cout << "sigma_vis_2-------" << sigma_vis_2 << std::endl;
-        // std::cout << "sigma_vis---------" << sigma_vis << std::endl;
 
         for (int i = 0; i < num_vis_elements; i++)
         {
@@ -373,7 +370,7 @@ int main()
     const int dim = 3;
 
     ViscoElasticModule<dim> visModel;
-    int num_vis_elements = 1;
+    int num_vis_elements = 6;
     vector<vector<double>> mat_viscous_prop(num_vis_elements, vector<double>(3));
     vector<double> mat_viscous_prop_eq(2);
 
@@ -382,28 +379,21 @@ int main()
     mat_viscous_prop[0][0] = 0.108;
     mat_viscous_prop[0][1] = 82100000;
     mat_viscous_prop[0][2] = 0.108;
-    // mat_viscous_prop_eq[1] = 0.5;   // mu_eq
-    // mat_viscous_prop_eq[2] = 0.1;   // k_eq
-    // mat_viscous_prop[0][0] = 0.005; // tau_d_v;
-    // mat_viscous_prop[0][1] = 0.6;   // mu_vis
-    // mat_viscous_prop[0][2] = 0.01;  // tau_r_v
-    // mat_viscous_prop[0][3] = 2.0;   // k_vis
-    // mat_viscous_prop[1][0] = 0.05;  // tau_d_v;
-    // mat_viscous_prop[1][1] = 0.4;   // mu_vis
-    // mat_viscous_prop[1][2] = 0.1;   // tau_r_v
-    // mat_viscous_prop[1][3] = 1.5;   // k_vis
-    // mat_viscous_prop[2][0] = 0.2;   // tau_d_v;
-    // mat_viscous_prop[2][1] = 0.3;   // mu_vis
-    // mat_viscous_prop[2][2] = 0.5;   // tau_r_v
-    // mat_viscous_prop[2][3] = 1.0;   // k_vis
-    // mat_viscous_prop[3][0] = 0.5;   // tau_d_v;
-    // mat_viscous_prop[3][1] = 0.2;   // mu_vis
-    // mat_viscous_prop[3][2] = 1.0;   // tau_r_v
-    // mat_viscous_prop[3][3] = 0.6;   // k_vis
-    // mat_viscous_prop[4][0] = 1.0;   // tau_d_v;
-    // mat_viscous_prop[4][1] = 0.1;   // mu_vis
-    // mat_viscous_prop[4][2] = 5.0;   // tau_r_v
-    // mat_viscous_prop[4][3] = 0.4;   // k_vis
+    mat_viscous_prop[1][0] = 0.467;
+    mat_viscous_prop[1][1] = 92790000;
+    mat_viscous_prop[1][2] = 0.467;
+    mat_viscous_prop[2][0] = 1.573;
+    mat_viscous_prop[2][1] = 179910000;
+    mat_viscous_prop[2][2] = 1.573;
+    mat_viscous_prop[3][0] = 8.857;
+    mat_viscous_prop[3][1] = 203590000;
+    mat_viscous_prop[3][2] = 8.857;
+    mat_viscous_prop[4][0] = 57.439;
+    mat_viscous_prop[4][1] = 164710000;
+    mat_viscous_prop[4][2] = 57.439;
+    mat_viscous_prop[5][0] = 531.744;
+    mat_viscous_prop[5][1] = 105350000;
+    mat_viscous_prop[5][2] = 531.744;
 
     ViscoElasticMaterial<3> mat(mat_viscous_prop, mat_viscous_prop_eq);
     visModel.set_material(mat);
@@ -419,11 +409,6 @@ int main()
     strain_3d[2][0] = 0.0;
     strain_3d[2][1] = 0.0;
     strain_3d[2][2] = 0.0;
-    // test standard tensors
-    std::cout << StandardTensors<dim>::del << std::endl;
-    std::cout << StandardTensors<dim>::Iden4 << std::endl;
-    std::cout << StandardTensors<dim>::I_dya_I << std::endl;
-    std::cout << StandardTensors<dim>::Iden4_dev << std::endl;
 
     num_vis_elements = visModel.mat.num_vis_elements;
     for (int i = 0; i < num_vis_elements; i++)
@@ -456,12 +441,8 @@ int main()
     }
     for (int i = 0; i < 1000; i++)
     {
-        // std::cout << "---------------     " << i << "       ---------------" << std::endl;
-        // std::cout << ans[i][0][0] << "\t" << ans[i][0][1] << std::endl;
-        // std::cout << ans[i][1][0] << "\t" << ans[i][1][1] << std::endl;
         std::cout << p[i] / p_eq << ",";
     }
     std::cout << "printing p eq" << std::endl;
-    std::cout << mu_eq << std::endl;
     std::cout << p_eq << std::endl;
 }
