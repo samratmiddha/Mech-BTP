@@ -214,19 +214,60 @@ public:
     }
 };
 
+template <int dim>
+struct PointHistory
+{
+    vector<Tensor<2, dim>> alpha_dev_hist;
+    vector<double> alpha_vol_hist;
+    Tensor<2, dim> e_dev_hist;
+    double e_vol_hist;
+
+    PointHistory(int num_vis_elements = 1)
+    {
+        reset(num_vis_elements);
+    }
+    void reset(int num_vis_elements = 1)
+    {
+        alpha_dev_hist.resize(num_vis_elements, Tensor<2, dim>());
+        alpha_vol_hist.resize(num_vis_elements, 0.0);
+        e_dev_hist = Tensor<2, dim>();
+        e_vol_hist = 0.0;
+    }
+    // Update functions (overwrite history)
+    void update_alpha_dev(const std::vector<Tensor<2, dim>> &alpha_dev_curr)
+    {
+        alpha_dev_hist = alpha_dev_curr;
+    }
+
+    void update_alpha_vol(const std::vector<double> &alpha_vol_curr)
+    {
+        alpha_vol_hist = alpha_vol_curr;
+    }
+
+    void update_e_dev(const Tensor<2, dim> &e_dev_curr)
+    {
+        e_dev_hist = e_dev_curr;
+    }
+
+    void update_e_vol(const double &e_vol_curr)
+    {
+        e_vol_hist = e_vol_curr;
+    }
+};
+
 // ---------------------------------------- viscoelastic module --------------------------------------------- //
 template <int dim>
 class ViscoElasticModule
 {
 public:
-    vector<Tensor<2, dim>> alpha_dev_hist;
-    vector<double> alpha_vol_hist;
-    Tensor<2, dim> e_dev_hist;
-    double e_vol_hist;
-    double delta_t = 0.531744;
+    double delta_t = 0.0531744;
     // double delta_t;
     ViscoElasticMaterial<dim> mat;
     Tensor<4, dim> c_ijkl_vis;
+    Tensor<2, dim> e_dev;
+    vector<Tensor<2, dim>> alpha_dev_curr;
+    vector<double> alpha_vol_curr;
+    double e_v;
     Tensor<2, dim> sigma_vis;
 
     ViscoElasticModule() {};
@@ -234,10 +275,6 @@ public:
     {
         this->mat = mat;
         this->delta_t = delta_t;
-        alpha_dev_hist.resize(mat.num_vis_elements);
-        alpha_vol_hist.resize(mat.num_vis_elements, 0.0);
-        e_dev_hist = 0.0;
-        e_vol_hist = 0.0;
     }
     ~ViscoElasticModule() {};
     void setDelta(double d)
@@ -248,17 +285,29 @@ public:
     void set_material(ViscoElasticMaterial<dim> &mat)
     {
         this->mat = mat;
-        alpha_dev_hist.resize(mat.num_vis_elements);
-        alpha_vol_hist.resize(mat.num_vis_elements, 0.0);
-        e_dev_hist = 0.0;
-        e_vol_hist = 0.0;
     }
     Tensor<4, dim> get_stiffness_tensor()
     {
         return c_ijkl_vis;
     }
+    vector<Tensor<2, dim>> get_alpha_dev()
+    {
+        return alpha_dev_curr;
+    }
+    vector<double> get_alpha_vol()
+    {
+        return alpha_vol_curr;
+    }
+    Tensor<2, dim> get_e_dev()
+    {
+        return e_dev;
+    }
+    double get_e_vol()
+    {
+        return e_v;
+    }
 
-    Tensor<2, dim> get_stress(Tensor<2, dim> e_e)
+    Tensor<2, dim> get_stress(Tensor<2, dim> e_e, PointHistory<dim> &history)
     {
         int num_vis_elements = mat.num_vis_elements;
 
@@ -281,7 +330,7 @@ public:
         double sigma_fact_v;
         Tensor<2, dim> alpha_dev_hist_tensor;
 
-        Tensor<2, dim> e_dev;
+        e_dev = Tensor<2, dim>();
         for (unsigned int i = 0; i < dim; ++i)
             for (unsigned int j = 0; j < dim; ++j)
                 for (unsigned int k = 0; k < dim; ++k)
@@ -289,7 +338,7 @@ public:
                         e_dev[i][j] += StandardTensors<dim>::Iden4_dev[i][j][k][l] * e_e[k][l];
 
         // calculate e_vol;
-        double e_v = 0.0;
+        e_v = 0.0;
         for (int i = 0; i < dim; ++i)
         {
             for (int j = 0; j < dim; ++j)
@@ -298,15 +347,8 @@ public:
             }
         }
 
-        std::cout << "printing e_e" << std::endl;
-        std::cout << e_e << std::endl;
-        std::cout << "printing e_vol" << std::endl;
-        std::cout << e_v << std::endl;
-        std::cout << "printing e_dev" << std::endl;
-        std::cout << e_dev << std::endl;
-        std::cout << "end" << std::endl;
-        vector<Tensor<2, dim>> alpha_dev_curr(num_vis_elements);
-        vector<double> alpha_vol_curr(num_vis_elements);
+        alpha_dev_curr.assign(num_vis_elements, Tensor<2, dim>());
+        alpha_vol_curr.assign(num_vis_elements, 0.0);
 
         for (int i = 0; i < num_vis_elements; i++)
         {
@@ -326,9 +368,8 @@ public:
             c_bulk_vis += k_vis[i] * tvr_dt * his_v * StandardTensors<dim>::Ivol;
             c_shear_vis += 2.0 * mu_vis[i] * tdr_dt * his_d * StandardTensors<dim>::Iden4_dev;
 
-            sigma_vis_2_vol += k_vis[i] * (his_v1 * alpha_vol_hist[i] + e_vol_hist * his_v2 * his_v - e_vol_hist) * StandardTensors<dim>::del;
-
-            sigma_vis_2_dev += 2.0 * mu_vis[i] * (his_d1 * alpha_dev_hist[i] + e_dev_hist * his_d2 * his_d - e_dev_hist);
+            sigma_vis_2_vol += k_vis[i] * (his_v1 * history.alpha_vol_hist[i] + history.e_vol_hist * his_v2 * his_v - history.e_vol_hist) * StandardTensors<dim>::del;
+            sigma_vis_2_dev += 2.0 * mu_vis[i] * (his_d1 * history.alpha_dev_hist[i] + history.e_dev_hist * his_d2 * his_d - history.e_dev_hist);
         }
 
         sigma_vis_2 = sigma_vis_2_vol + sigma_vis_2_dev;
@@ -348,29 +389,33 @@ public:
             double his_d1 = exp(-1 * (delta_t) / tau_d_v[i]);
             double his_d = 1.0 - exp(-1 * delta_t / tau_d_v[i]);
 
-            alpha_dev_curr[i] = his_d1 * alpha_dev_hist[i] + (e_dev_hist - ((e_dev - e_dev_hist) / delta_t) * tau_d_v[i]) * his_d + (e_dev - e_dev_hist);
+            alpha_dev_curr[i] = his_d1 * history.alpha_dev_hist[i] + (history.e_dev_hist - ((e_dev - history.e_dev_hist) / delta_t) * tau_d_v[i]) * his_d + (e_dev - history.e_dev_hist);
 
             double his_v1 = exp(-1 * (delta_t) / tau_r_v[i]);
             double his_v = 1.0 - exp(-1 * (delta_t) / tau_r_v[i]);
 
-            alpha_vol_curr[i] = his_v1 * alpha_vol_hist[i] + (e_vol_hist - ((e_v - e_vol_hist) / delta_t) * tau_r_v[i]) * his_v + (e_v - e_vol_hist);
+            alpha_vol_curr[i] = his_v1 * history.alpha_vol_hist[i] + (history.e_vol_hist - ((e_v - history.e_vol_hist) / delta_t) * tau_r_v[i]) * his_v + (e_v - history.e_vol_hist);
         }
-
-        alpha_vol_hist = alpha_vol_curr;
-        alpha_dev_hist = alpha_dev_curr;
-        e_vol_hist = e_v;
-        e_dev_hist = e_dev;
 
         return sigma_vis;
     }
 };
+
+template <int dim>
+void update_history(PointHistory<dim> &hist, ViscoElasticModule<dim> &vm)
+{
+    hist.update_alpha_dev(vm.get_alpha_dev());
+    hist.update_alpha_vol(vm.get_alpha_vol());
+    hist.update_e_vol(vm.get_e_vol());
+    hist.update_e_dev(vm.get_e_dev());
+}
 
 int main()
 {
     const int dim = 3;
 
     ViscoElasticModule<dim> visModel;
-    int num_vis_elements = 6;
+    int num_vis_elements = 1;
     vector<vector<double>> mat_viscous_prop(num_vis_elements, vector<double>(3));
     vector<double> mat_viscous_prop_eq(2);
 
@@ -379,21 +424,21 @@ int main()
     mat_viscous_prop[0][0] = 0.108;
     mat_viscous_prop[0][1] = 82100000;
     mat_viscous_prop[0][2] = 0.108;
-    mat_viscous_prop[1][0] = 0.467;
-    mat_viscous_prop[1][1] = 92790000;
-    mat_viscous_prop[1][2] = 0.467;
-    mat_viscous_prop[2][0] = 1.573;
-    mat_viscous_prop[2][1] = 179910000;
-    mat_viscous_prop[2][2] = 1.573;
-    mat_viscous_prop[3][0] = 8.857;
-    mat_viscous_prop[3][1] = 203590000;
-    mat_viscous_prop[3][2] = 8.857;
-    mat_viscous_prop[4][0] = 57.439;
-    mat_viscous_prop[4][1] = 164710000;
-    mat_viscous_prop[4][2] = 57.439;
-    mat_viscous_prop[5][0] = 531.744;
-    mat_viscous_prop[5][1] = 105350000;
-    mat_viscous_prop[5][2] = 531.744;
+    // mat_viscous_prop[1][0] = 0.467;
+    // mat_viscous_prop[1][1] = 92790000;
+    // mat_viscous_prop[1][2] = 0.467;
+    // mat_viscous_prop[2][0] = 1.573;
+    // mat_viscous_prop[2][1] = 179910000;
+    // mat_viscous_prop[2][2] = 1.573;
+    // mat_viscous_prop[3][0] = 8.857;
+    // mat_viscous_prop[3][1] = 203590000;
+    // mat_viscous_prop[3][2] = 8.857;
+    // mat_viscous_prop[4][0] = 57.439;
+    // mat_viscous_prop[4][1] = 164710000;
+    // mat_viscous_prop[4][2] = 57.439;
+    // mat_viscous_prop[5][0] = 531.744;
+    // mat_viscous_prop[5][1] = 105350000;
+    // mat_viscous_prop[5][2] = 531.744;
 
     ViscoElasticMaterial<3> mat(mat_viscous_prop, mat_viscous_prop_eq);
     visModel.set_material(mat);
@@ -411,33 +456,24 @@ int main()
     strain_3d[2][2] = 0.0;
 
     num_vis_elements = visModel.mat.num_vis_elements;
-    for (int i = 0; i < num_vis_elements; i++)
-    {
-        std::cout << visModel.mat.get_k_vis()[i] << " " << visModel.mat.get_e_vis()[i] << " " << visModel.mat.get_tau_r_v()[i] << " " << visModel.mat.get_tau_d_v()[i] << std::endl;
-    }
-    for (int i = 0; i < num_vis_elements; i++)
-    {
-        std::cout << visModel.alpha_vol_hist[i] << std::endl;
-        std::cout << visModel.alpha_dev_hist[i][0][0] << "\t" << visModel.alpha_dev_hist[i][0][1] << std::endl;
-        std::cout << visModel.alpha_dev_hist[i][1][0] << "\t" << visModel.alpha_dev_hist[i][1][1] << std::endl;
-    }
     Tensor<2, dim> strain_temp;
-
     vector<Tensor<2, dim>> ans;
-
     double mu_eq = mat.get_mu_eq();
+    double k_eq = mat.get_k_eq();
     // double p_eq = k_eq * ((strain_3d[0][0] + strain_3d[1][1] + strain_3d[2][2]));
     double p_eq = 2 * mu_eq * (strain_3d[0][1]);
     // double p_eq = k_eq * (strain_temp[0][0] + strain_temp[1][1] + strain_temp[2][2]) / 3;
 
     vector<double> p;
+    PointHistory<dim> hist(num_vis_elements);
     for (int i = 0; i < 1000; i++)
     {
         strain_temp = (1 / 100.0) * double(std::min(i, 100)) * strain_3d;
         // strain_temp = (i / 1000.0) * strain_3d;
-        ans.push_back(visModel.get_stress(strain_temp));
+        ans.push_back(visModel.get_stress(strain_temp, hist));
         // p.push_back((ans[i][0][0] + ans[i][1][1] + ans[i][2][2]) / 3);
         p.push_back(ans[i][0][1]);
+        update_history<dim>(hist, visModel);
     }
     for (int i = 0; i < 1000; i++)
     {
