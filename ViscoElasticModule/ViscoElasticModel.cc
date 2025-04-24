@@ -260,7 +260,7 @@ template <int dim>
 class ViscoElasticModule
 {
 public:
-    double delta_t = 0.0531744;
+    double delta_t = (0.00531744 / 5);
     // double delta_t;
     ViscoElasticMaterial<dim> mat;
     Tensor<4, dim> c_ijkl_vis;
@@ -422,7 +422,7 @@ int main()
     mat_viscous_prop_eq[0] = 356960000; // youngs moulus
     mat_viscous_prop_eq[1] = 0.35;      // nu
     mat_viscous_prop[0][0] = 0.108;
-    mat_viscous_prop[0][1] = 82100000;
+    mat_viscous_prop[0][1] = 80000000;
     mat_viscous_prop[0][2] = 0.108;
     // mat_viscous_prop[1][0] = 0.467;
     // mat_viscous_prop[1][1] = 92790000;
@@ -445,8 +445,8 @@ int main()
     Tensor<2, dim> strain_3d;
 
     // Initialize the strain tensor with constant values
-    strain_3d[0][0] = 0.0; // epsilon_xx
-    strain_3d[0][1] = 0.015;
+    strain_3d[0][0] = 0.015; // epsilon_xx
+    strain_3d[0][1] = 0.0;
     strain_3d[0][2] = 0.0;
     strain_3d[1][0] = 0.0;
     strain_3d[1][1] = 0.0;
@@ -460,8 +460,8 @@ int main()
     vector<Tensor<2, dim>> ans;
     double mu_eq = mat.get_mu_eq();
     double k_eq = mat.get_k_eq();
-    // double p_eq = k_eq * ((strain_3d[0][0] + strain_3d[1][1] + strain_3d[2][2]));
-    double p_eq = 2 * mu_eq * (strain_3d[0][1]);
+    double p_eq = k_eq * ((strain_3d[0][0] + strain_3d[1][1] + strain_3d[2][2]));
+    // double p_eq = 2 * mu_eq * (strain_3d[0][1]);
     // double p_eq = k_eq * (strain_temp[0][0] + strain_temp[1][1] + strain_temp[2][2]) / 3;
 
     vector<double> p;
@@ -471,14 +471,22 @@ int main()
         strain_temp = (1 / 100.0) * double(std::min(i, 100)) * strain_3d;
         // strain_temp = (i / 1000.0) * strain_3d;
         ans.push_back(visModel.get_stress(strain_temp, hist));
-        // p.push_back((ans[i][0][0] + ans[i][1][1] + ans[i][2][2]) / 3);
-        p.push_back(ans[i][0][1]);
+        p.push_back((ans[i][0][0] + ans[i][1][1] + ans[i][2][2]) / 3);
+        // p.push_back(ans[i][0][1]);
         update_history<dim>(hist, visModel);
     }
     for (int i = 0; i < 1000; i++)
     {
         std::cout << p[i] / p_eq << ",";
     }
+    std::ofstream fout("output16.txt");
+    fout << "step,strain,p,p_over_p_eq\n";
+    for (int i = 0; i < 1000; i++)
+    {
+        double strain_val = (1 / 100.0) * double(std::min(i, 100)) * strain_3d[0][0];
+        fout << i << "," << strain_val << "," << p[i] << "," << p[i] / p_eq << "\n";
+    }
+    fout.close();
     std::cout << "printing p eq" << std::endl;
     std::cout << p_eq << std::endl;
 }
